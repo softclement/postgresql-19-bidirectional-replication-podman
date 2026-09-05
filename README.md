@@ -779,19 +779,30 @@ echo "Project folder removed. Clean slate."
 
 ## Notes: Scope, Real-World Use Cases, and HA
 
-This PoC was originally run **3 months ago on Docker Compose**; this edition re-does the same exploration on **standalone Podman containers**, no compose file. The goal both times was the same — understand PostgreSQL's **native** bidirectional logical replication (the `origin` parameter, introduced in PG16) as a feature, not to build a production topology. **This is not an HA setup** — there's no failover, no load balancer, no automatic promotion; if a node goes down, the other simply stops receiving/sending until it's back.
+This PoC was originally run **3 months ago on Docker Compose**. This edition redoes the same exploration on **standalone Podman containers**, no compose file. The goal is simply to understand PostgreSQL's **native** bidirectional logical replication (the `origin` parameter, introduced in PostgreSQL 16) as a feature. **This setup is not HA** — there's no automatic failover, no load balancer, no promotion; if a node goes down, the other side just keeps working on its own until the first node comes back.
 
-**Where bidirectional replication is actually useful in practice:**
-- **Multi-region active-active** — two regional databases where each region's users write locally (lower latency) and both copies stay eventually consistent, e.g. an app serving both US and India users from region-local Postgres instances.
-- **Zero-downtime migrations** — running old and new database versions side by side, writable on both, while cutting traffic over gradually.
-- **Branch/edge autonomy with central sync** — retail or banking branches that must keep operating during a network partition, syncing back once reconnected.
-- **Distributing write load across two masters** for a scoped, non-overlapping key range (e.g., region-partitioned customer IDs) — never for two nodes writing the *same* rows, since there's no automatic conflict resolution (see Caveats above).
+### A simple way to think about it
 
-**Layering HA on top of each node**: bidirectional replication and HA solve different problems and can coexist — each of Node1/Node2 above could itself be a small HA cluster (e.g., Patroni + etcd + HAProxy) so that a single node's hardware failure doesn't take out that side of the bidirectional pair. The bidirectional link would then run between the two clusters' current primaries, with Patroni handling failover *within* each side and `origin = none` still handling the cross-side sync. That combination — HA within each node, bidirectional replication between nodes — is closer to what a real active-active production deployment would need.
+Imagine two bank branches continuously exchanging transaction information.
+If Branch B temporarily goes offline, Branch A can continue operating.
+When Branch B comes back, it catches up with the changes it missed.
+And because replicated changes are tagged with their origin, they don't simply get sent back again — so there's no replication loop.
+
+### A few real-world use cases (easy to remember)
+
+- **Two regions, one database feel** — a bank with branches in Chennai and Mumbai, each writing locally for speed, both staying in sync.
+- **Old system + new system, running together** — keeping an old and a new database both live and writable during a slow, safe migration.
+- **Branch keeps working when offline** — a store or branch office that must keep taking orders even if its link to head office drops, syncing up once reconnected.
+- **Spreading writes across two servers** — two servers sharing the write load, as long as each one owns a different, non-overlapping slice of the data (never the same rows on both — see Caveats above for why).
+
+### Is HA possible on top of this?
+
+Yes — in short: each node (Node1, Node2) can separately be made highly available (for example, using tools like Patroni, repmgr, or a similar PostgreSQL HA solution) so a single node's failure doesn't take that side down. The bidirectional replication link would then simply run between whichever node is currently "active" on each side. HA and bidirectional replication solve two different problems and stack cleanly on top of each other — this PoC only covers the replication half.
 
 ---
 
 ## References
+- [PostgreSQL Logical Replication Docs](https://www.postgresql.org/docs/current/logical-replication.html)
 - [CREATE SUBSCRIPTION — origin parameter](https://www.postgresql.org/docs/current/sql-createsubscription.html)
 - [postgres Docker Hub image](https://hub.docker.com/_/postgres)
 - [Podman documentation](https://docs.podman.io/)
